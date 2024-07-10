@@ -1,0 +1,80 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-stacks-prometheus
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-configs
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./infrastructure/stacks/prometheus
+  prune: true
+  wait: true
+  postBuild:
+    substitute:
+      grafana_ingress_host: "cess-grafana.use1-nonprod.internal-kognitiv.com"
+      monitoring_service_account: "cess-use1-nonprod-gke-workload@phoenix-nonprod.iam.gserviceaccount.com"
+      thanosGCSBucket: "cess-use1-nonprod-thanos-metrics-gcs"
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-stacks-thanos
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-stacks-prometheus
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./infrastructure/stacks/thanos
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-stacks-loki
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-stacks-prometheus
+  interval: 1h
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./infrastructure/stacks/loki
+  prune: true
+  wait: true
+  postBuild:
+    substitute:
+      monitoring_service_account: "cess-use1-nonprod-gke-workload@phoenix-nonprod.iam.gserviceaccount.com"
+      lokiGCSBucket: "cess-use1-nonprod-loki-logs"
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: otel-stack
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-stacks-prometheus
+  interval: 1h
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./infrastructure/stacks/otel-stack
+  prune: true

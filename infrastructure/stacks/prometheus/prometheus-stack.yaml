@@ -1,0 +1,179 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+  annotations:
+    iam.gke.io/gcp-service-account: "${monitoring_service_account}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thanos-storage-config
+  namespace: monitoring
+type: Opaque
+stringData:
+  thanos-storage-config.yaml: |
+    type: GCS
+    config:
+      bucket: "${thanosGCSBucket}"
+---
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: HelmRepository
+metadata:
+  name: prometheus-stack
+  namespace: flux-system
+spec:
+  interval: 120m
+  # OCI builds for kube-prometheus-stack have been temporarily disabled (see https://github.com/prometheus-community/helm-charts/issues/2940).
+  type: default
+  url: https://prometheus-community.github.io/helm-charts
+---
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 5m
+  chart:
+    spec:
+      version: "46.x"
+      chart: kube-prometheus-stack
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-stack
+        namespace: flux-system
+      interval: 60m
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  # https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack/values.yaml
+  values:
+    alertmanager:
+      enabled: true
+
+    prometheus:
+      enabled: true
+      serviceAccount:
+        create: false
+        name: prometheus
+      prometheusSpec:
+        retention: 24h
+        podMonitorSelectorNilUsesHelmValues: false
+        serviceMonitorSelectorNilUsesHelmValues: false
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        thanos:
+          objectStorageConfig:
+            key: thanos-storage-config.yaml
+            name: thanos-storage-config
+        podMonitorNamespaceSelector: {}
+        podMonitorSelector:
+          matchLabels:
+            app.kubernetes.io/component: monitoring
+      thanosService:
+        enabled: true
+      thanosServiceMonitor:
+        enabled: true
+        interval: 5s
+
+    prometheusOperator:
+      prometheusConfigReloader:
+        resources:
+          requests:
+            cpu: 25m
+            memory: 50Mi
+      thanosImage:
+        repository: thanos/thanos
+        version: v0.32.2
+        tag: v0.32.2    
+
+    grafana:
+      enabled: true
+      defaultDashboardsEnabled: true
+      adminPassword: Gf@Kognitiv#300
+      envFromSecret: grafana-aad-oauth-secret
+      ingress:
+        enabled: enable
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+        hosts:
+          - "${grafana_ingress_host}"
+        path: /
+        tls:
+        - secretName: stats-ki-tls
+          hosts:
+          - "${grafana_ingress_host}"
+      grafana.ini:
+        paths:
+          data: /var/lib/grafana/
+          logs: /var/log/grafana
+          plugins: /var/lib/grafana/plugins
+          provisioning: /etc/grafana/provisioning
+        analytics:
+          check_for_updates: false
+        server:
+          root_url: "https://${grafana_ingress_host}"
+        # Create secret: kubectl create secret -n monitoring generic grafana-aad-oauth-secret --from-literal=GF_AUTH_AZUREAD_CLIENT_ID=xxx --from-literal=GF_AUTH_AZUREAD_CLIENT_SECRET=xxx
+        auth.azuread:
+          name: Azure AD
+          enabled: true
+          allow_sign_up: true
+          auto_login: false
+          scopes: "openid email profile"
+          auth_url: https://login.microsoftonline.com/a50f2666-0f69-47db-b70b-265567e6627f/oauth2/v2.0/authorize
+          token_url: https://login.microsoftonline.com/a50f2666-0f69-47db-b70b-265567e6627f/oauth2/v2.0/token
+      sidecar:
+        dashboards:
+          enabled: true
+          label: grafana_dashboard
+          labelValue: "1"
+          searchNamespace: ALL
+        datasources:
+          enabled: true
+          defaultDatasourceEnabled: true
+          isDefaultDatasource: true
+          uid: prometheus
+          url: http://thanos-query:9090/
+          createPrometheusReplicasDatasources: false
+          label: grafana_datasource
+          labelValue: "1"
+      additionalDataSources:
+      - name: jaeger
+        editable: false
+        jsonData:
+            tlsSkipVerify: true
+        orgId: 1
+        type: jaeger
+        url: http://jaeger-query:16688/jaeger
+        version: 1
+
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              # Ignore these objects from Flux diff as they are mutated from chart hooks
+              kind: (ValidatingWebhookConfiguration|MutatingWebhookConfiguration)
+              name: kube-prometheus-stack-admission
+            patch: |
+              - op: add
+                path: /metadata/annotations/helm.toolkit.fluxcd.io~1driftDetection
+                value: disabled
+          - target:
+              # Ignore these objects from Flux diff as they are mutated at apply time but not at dry-run time
+              kind: PrometheusRule
+            patch: |
+              - op: add
+                path: /metadata/annotations/helm.toolkit.fluxcd.io~1driftDetection
+                value: disabled
