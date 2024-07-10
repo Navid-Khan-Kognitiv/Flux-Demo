@@ -11,7 +11,7 @@ spec:
     branch: main
   secretRef:
     name: flux-system
-  url: ssh://git@github.com/kognitiv-corporation/cess-gcp-infrastructure-tf
+  url: https://github.com/Navid-Khan-Kognitiv/Flux-Demo.git
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
